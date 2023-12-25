@@ -101,10 +101,9 @@ class TranscriptionServer:
             multilingual=options["multilingual"],
             language=options["language"],
             task=options["task"],
-            client_uid=options["uid"],
-            model_size=options["model_size"]
+            client_uid=options["uid"]
         )
-        
+
         self.clients[websocket] = client
         self.clients_start_time[websocket] = time.time()
 
@@ -128,8 +127,7 @@ class TranscriptionServer:
 
             except Exception as e:
                 logging.error(e)
-                if self.clients[websocket].model_size is not None:
-                    self.clients[websocket].cleanup()
+                self.clients[websocket].cleanup()
                 self.clients.pop(websocket)
                 self.clients_start_time.pop(websocket)
                 logging.info("Connection Closed.")
@@ -182,16 +180,7 @@ class ServeClient:
     SERVER_READY = "SERVER_READY"
     DISCONNECT = "DISCONNECT"
 
-    def __init__(
-        self,
-        websocket,
-        task="transcribe",
-        device=None,
-        multilingual=False,
-        language=None,
-        client_uid=None,
-        model_size="small"
-        ):
+    def __init__(self, websocket, task="transcribe", device=None, multilingual=False, language=None, client_uid=None):
         """
         Initialize a ServeClient instance.
         The Whisper model is initialized based on the client's language and device availability.
@@ -210,22 +199,11 @@ class ServeClient:
         self.client_uid = client_uid
         self.data = b""
         self.frames = b""
-        self.model_sizes = [
-            "tiny", "base", "small", "medium", "large-v2"
-        ]
-        self.multilingual = multilingual
-        self.model_size = self.get_model_size(model_size)
-        self.language = language if self.multilingual else "en"
+        self.language = language if multilingual else "en"
         self.task = task
-        self.websocket = websocket
-        
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        
-        if self.model_size == None:
-            return
-        
         self.transcriber = WhisperModel(
-            self.model_size, 
+            "small" if multilingual else "tiny.en", 
             device=device,
             compute_type="int8" if device=="cpu" else "float16", 
             local_files_only=False,
@@ -250,6 +228,7 @@ class ServeClient:
         self.pick_previous_segments = 2
 
         # threading
+        self.websocket = websocket
         self.trans_thread = threading.Thread(target=self.speech_to_text)
         self.trans_thread.start()
         self.websocket.send(
@@ -261,30 +240,34 @@ class ServeClient:
             )
         )
     
-    def get_model_size(self, model_size):
+    def fill_output(self, output):
         """
-        Returns the whisper model size based on multilingual.
-        """
-        if model_size not in self.model_sizes:
-            self.websocket.send(
-                json.dumps(
-                    {
-                        "uid": self.client_uid,
-                        "status": "ERROR",
-                        "message": f"Invalid model size {model_size}. Available choices: {self.model_sizes}"
-                    }
-                )
-            )
-            return None
+        Format the current incomplete transcription output by combining it with previous complete segments.
+        The resulting transcription is wrapped into two lines, each containing a maximum of 50 characters.
+
+        It ensures that the combined transcription fits within two lines, with a maximum of 50 characters per line.
+        Segments are concatenated in the order they exist in the list of previous segments, with the most
+        recent complete segment first and older segments prepended as needed to maintain the character limit.
+        If a 3-second pause is detected in the previous segments, any text preceding it is discarded to ensure
+        the transcription starts with the most recent complete content. The resulting transcription is returned
+        as a single string.
+
+        Args:
+            output(str): The current incomplete transcription segment.
         
-        if model_size == "large-v2":
-            self.multilingual = True
-            return model_size
-
-        if not self.multilingual:
-            model_size = model_size + ".en"
-
-        return model_size
+        Returns:
+            str: A formatted transcription wrapped in two lines.
+        """
+        text = ''
+        pick_prev = min(len(self.text), self.pick_previous_segments)
+        for seg in self.text[-pick_prev:]:
+            # discard everything before a 3 second pause
+            if seg == '':
+                text = ''
+            else:
+                text += seg
+        wrapped = "".join(text + output)
+        return wrapped
     
     def add_frames(self, frame_np):
         """

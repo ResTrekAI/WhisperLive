@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
     git \
     bzip2 \
     libx11-6 \
- && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 RUN apt update
 
@@ -23,25 +23,27 @@ RUN apt install software-properties-common -y && \
     apt update
 
 RUN apt install python3-dev -y && \
-    apt install python-is-python3
-    
+    apt install python-is-python3 && \
+    # install pip
+    apt install python3-pip -y
 
-# install pip
-RUN apt install python3-pip -y
-
+#install portaudio, ffmpeg, wget
+RUN apt install portaudio19-dev -y && \
+    apt install ffmpeg -y && \
+    apt install wget -y && \
+    rm -rf /var/lib/apt/lists/*
 # Create a working directory.
 RUN mkdir /app
 WORKDIR /app
 
-COPY setup.sh /app
 COPY requirements/ /app
 
 RUN apt update --fix-missing
-RUN bash setup.sh
+# RUN bash setup.sh
 RUN pip install -r server.txt
 
 COPY whisper_live /app/whisper_live
 
 COPY run_server.py /app
-
+EXPOSE 9090
 CMD ["python", "run_server.py"]
